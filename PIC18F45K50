@@ -1,0 +1,240 @@
+#define LGFX_USE_V1
+#include <LovyanGFX.hpp>
+#include <DHT.h>
+#include <WiFi.h>
+#include <time.h>
+
+// Configuración WiFi
+const char* ssid = "Usumacinta6116_2.4G";
+const char* password = "Sanmanuel6116";
+
+// Configuración NTP
+const char* ntpServer = "cronos.cenam.mx";
+const long gmtOffset_sec = -21600; // UTC-6 (CST, Puebla, México)
+const int daylightOffset_sec = 0;
+
+// Configuración DHT
+#define DHTPIN 14
+#define DHTTYPE DHT11
+DHT dht(DHTPIN, DHTTYPE);
+
+// Configuración pantalla
+#define CS_PIN   5
+#define DC_PIN   27
+#define MOSI_PIN 19
+#define SCK_PIN  18
+#define LED_PIN  12
+#define MISO_PIN 23
+
+class LGFX : public lgfx::LGFX_Device {
+  lgfx::Panel_ILI9341 _panel_instance;
+  lgfx::Bus_SPI _bus_instance;
+  lgfx::Light_PWM _light_instance;
+
+public:
+  LGFX(void) {
+    auto cfg_bus = _bus_instance.config();
+    cfg_bus.spi_host = VSPI_HOST;
+    cfg_bus.pin_mosi = MOSI_PIN;
+    cfg_bus.pin_miso = MISO_PIN;
+    cfg_bus.pin_sclk = SCK_PIN;
+    cfg_bus.pin_dc = DC_PIN;
+    cfg_bus.freq_write = 40000000;
+    cfg_bus.freq_read = 16000000;
+    cfg_bus.spi_mode = 0;
+    cfg_bus.dma_channel = 1;
+    cfg_bus.use_lock = true;
+    cfg_bus.spi_3wire = false;
+    _bus_instance.config(cfg_bus);
+    _panel_instance.setBus(&_bus_instance);
+
+    auto cfg_panel = _panel_instance.config();
+    cfg_panel.pin_cs = CS_PIN;
+    cfg_panel.pin_rst = -1;
+    cfg_panel.pin_busy = -1;
+    cfg_panel.panel_width = 240;
+    cfg_panel.panel_height = 320;
+    cfg_panel.memory_width = 240;
+    cfg_panel.memory_height = 320;
+    cfg_panel.offset_x = 0;
+    cfg_panel.offset_y = 0;
+    cfg_panel.offset_rotation = 0;
+    cfg_panel.dummy_read_pixel = 8;
+    cfg_panel.dummy_read_bits = 1;
+    cfg_panel.readable = true;
+    cfg_panel.invert = false;
+    cfg_panel.rgb_order = false;
+    cfg_panel.dlen_16bit = false;
+    cfg_panel.bus_shared = true;
+    _panel_instance.config(cfg_panel);
+
+    auto cfg_light = _light_instance.config();
+    cfg_light.pin_bl = LED_PIN;
+    cfg_light.freq = 44100;
+    cfg_light.pwm_channel = 7;
+    cfg_light.invert = false;
+    _light_instance.config(cfg_light);
+    _panel_instance.setLight(&_light_instance);
+
+    setPanel(&_panel_instance);
+  }
+};
+
+LGFX tft;
+
+// Íconos (16x16 para reloj, 32x32 para temp y humedad)
+const uint8_t icon_clock[] PROGMEM = {
+  0x07, 0xE0, 0x18, 0x18, 0x20, 0x04, 0x40, 0x02, 0x47, 0xC2, 0x80, 0x01,
+  0x80, 0x01, 0x80, 0x01, 0x80, 0x01, 0x80, 0x01, 0x47, 0xC2, 0x40, 0x02,
+  0x20, 0x04, 0x18, 0x18, 0x07, 0xE0, 0x00, 0x00
+};
+
+const uint8_t icon_temp[] PROGMEM = {
+  0x00, 0x00, 0x00, 0x00, 0x00, 0x03, 0xC0, 0x00, 0x00, 0x03, 0xC0, 0x00,
+  0x00, 0x03, 0xC0, 0x00, 0x00, 0x03, 0xC0, 0x00, 0x00, 0x03, 0xC0, 0x00,
+  0x00, 0x03, 0xC0, 0x00, 0x00, 0x03, 0xC0, 0x00, 0x00, 0x03, 0xC0, 0x00,
+  0x00, 0x03, 0xC0, 0x00, 0x00, 0x03, 0xC0, 0x00, 0x00, 0x03, 0xC0, 0x00,
+  0x00, 0x07, 0xE0, 0x00, 0x00, 0x0F, 0xF0, 0x00, 0x00, 0x1F, 0xF8, 0x00,
+  0x00, 0x1F, 0xF8, 0x00, 0x00, 0x0F, 0xF0, 0x00, 0x00, 0x0F, 0xF0, 0x00,
+  0x00, 0x0F, 0xF0, 0x00, 0x00, 0x0F, 0xF0, 0x00, 0x00, 0x0F, 0xF0, 0x00,
+  0x00, 0x0F, 0xF0, 0x00, 0x00, 0x0F, 0xF0, 0x00, 0x00, 0x0F, 0xF0, 0x00,
+  0x00, 0x0F, 0xF0, 0x00, 0x00, 0x0F, 0xF0, 0x00, 0x00, 0x0F, 0xF0, 0x00,
+  0x00, 0x00, 0x00, 0x00
+};
+
+const uint8_t icon_humidity[] PROGMEM = {
+  0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x80, 0x00,
+  0x00, 0x01, 0xC0, 0x00, 0x00, 0x03, 0xE0, 0x00, 0x00, 0x07, 0xF0, 0x00,
+  0x00, 0x0F, 0xF8, 0x00, 0x00, 0x1F, 0xFC, 0x00, 0x00, 0x1F, 0xFC, 0x00,
+  0x00, 0x3F, 0xFE, 0x00, 0x00, 0x7F, 0xFF, 0x00, 0x00, 0x7F, 0xFF, 0x00,
+  0x00, 0xFF, 0xFF, 0x80, 0x00, 0xFF, 0xFF, 0x80, 0x00, 0xFF, 0xFF, 0x80,
+  0x00, 0xFF, 0xFF, 0x80, 0x00, 0xFF, 0xFF, 0x80, 0x00, 0xFF, 0xFF, 0x80,
+  0x00, 0xFF, 0xFF, 0x80, 0x00, 0x7F, 0xFF, 0x80, 0x00, 0x7F, 0xFF, 0x00,
+  0x00, 0x3F, 0xFE, 0x00, 0x00, 0x1F, 0xFC, 0x00, 0x00, 0x0F, 0xF8, 0x00,
+  0x00, 0x07, 0xF0, 0x00, 0x00, 0x03, 0xE0, 0x00, 0x00, 0x01, 0xC0, 0x00,
+  0x00, 0x00, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00
+};
+
+void setup() {
+  Serial.begin(115200);
+  dht.begin();
+  tft.begin();
+  tft.setRotation(1);
+  tft.fillScreen(TFT_BLACK);
+  drawInterface();
+
+  // Intentar conectar a WiFi
+  WiFi.begin(ssid, password);
+  Serial.print("Conectando a WiFi");
+  int attempts = 0;
+  while (WiFi.status() != WL_CONNECTED && attempts < 20) { // Aumentar intentos a 20 (10 segundos)
+    delay(500);
+    Serial.print(".");
+    attempts++;
+  }
+  if (WiFi.status() == WL_CONNECTED) {
+    Serial.println(" Conectado");
+    Serial.print("IP: ");
+    Serial.println(WiFi.localIP());
+    configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
+    // Esperar sincronización NTP
+    delay(1000); // Dar tiempo para que el NTP se sincronice
+    struct tm timeinfo;
+    if (getLocalTime(&timeinfo)) {
+      Serial.println("NTP sincronizado correctamente");
+    } else {
+      Serial.println("Fallo inicial en sincronización NTP");
+    }
+  } else {
+    Serial.println(" Sin conexión WiFi");
+  }
+}
+
+void drawInterface() {
+  tft.fillRoundRect(5, 5, 315, 100, 8, TFT_DARKCYAN);
+  tft.fillRoundRect(5, 110, 155, 125, 8, TFT_NAVY);
+  tft.fillRoundRect(165, 110, 155, 125, 8, TFT_PURPLE);
+
+  tft.drawBitmap(118, 20, icon_clock, 16, 16, TFT_WHITE);
+  tft.setTextColor(TFT_WHITE);
+  tft.setTextSize(1);
+  tft.setCursor(147, 23);
+  tft.print("HORA (CST)");
+
+  tft.drawBitmap(65, 125, icon_temp, 32, 32, TFT_RED);
+  tft.setCursor(50, 167);
+  tft.print("Temperatura");
+
+  tft.drawBitmap(226, 125, icon_humidity, 32, 32, TFT_BLUE);
+  tft.setCursor(222, 167);
+  tft.print("Humedad");
+}
+
+void printLocalTime() {
+  struct tm timeinfo;
+  if (WiFi.status() != WL_CONNECTED) {
+    tft.setTextColor(TFT_RED, TFT_DARKCYAN);
+    tft.setCursor(78, 52);
+    tft.setTextSize(2);
+    tft.print("Sin WiFi");
+    Serial.println("Sin conexión WiFi");
+    return;
+  }
+  if (!getLocalTime(&timeinfo)) {
+    tft.setTextColor(TFT_RED, TFT_DARKCYAN);
+    tft.setCursor(78, 52);
+    tft.setTextSize(2);
+    tft.print("Sin NTP");
+    Serial.println("Fallo al obtener hora NTP");
+    return;
+  }
+  char timeStr[12];
+  strftime(timeStr, sizeof(timeStr), "%H:%M:%S", &timeinfo);
+  tft.setTextColor(TFT_YELLOW, TFT_DARKCYAN);
+  tft.setCursor(68, 52);
+  tft.setTextSize(4);
+  tft.print(timeStr);
+}
+
+void loop() {
+  // Intentar reconectar WiFi si está desconectado
+  if (WiFi.status() != WL_CONNECTED) {
+    WiFi.reconnect();
+    delay(500); // Dar tiempo para reconexión
+    if (WiFi.status() == WL_CONNECTED) {
+      Serial.println("Reconexión WiFi exitosa");
+      Serial.print("IP: ");
+      Serial.println(WiFi.localIP());
+      configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
+      delay(1000); // Esperar sincronización NTP
+    }
+  }
+
+  // Leer datos DHT
+  float temp = dht.readTemperature();
+  float hum = dht.readHumidity();
+
+  // Actualizar hora
+  printLocalTime();
+
+  // Mostrar datos DHT
+  tft.setTextSize(3);
+  if (isnan(temp) || isnan(hum)) {
+    tft.setTextColor(TFT_YELLOW, TFT_NAVY);
+    tft.setCursor(41, 197);
+    tft.print("Err DHT");
+    tft.setTextColor(TFT_YELLOW, TFT_PURPLE);
+    tft.setCursor(201, 197);
+    tft.print("Err DHT");
+    Serial.println("Error DHT");
+  } else {
+    tft.setTextColor(TFT_YELLOW, TFT_NAVY);
+    tft.setCursor(39, 190);
+    tft.printf("%.1fC", temp);
+    tft.setTextColor(TFT_YELLOW, TFT_PURPLE);
+    tft.setCursor(201, 190);
+    tft.printf("%.1f%%", hum);
+  }
+
+  delay(1000);
+}
